@@ -15,12 +15,6 @@ const ColoursAdjacent = packed struct {
     white : bool,
 };
 
-const Colour = enum {
-    black,  
-    white, 
-    empty, 
-};
-
 // The gamestate
 // each board element is represented by a u2.
 // 0 represents empty; 1 = black; 2 = white
@@ -52,7 +46,7 @@ pub fn GameState(comptime length: u8) type {
 
         // NOTE could these sizes be reduced?
         // There must be a theoretical limit on the number of possible captures in a game of Go;
-        // contingent on the super-ko rules being used (i.e. forbidding infinite loops).
+        // contingent on the super-kō rules being used (i.e. forbidding infinite loops).
         black_captures : u32,
         white_captures : u32,
 
@@ -73,7 +67,7 @@ pub fn GameState(comptime length: u8) type {
                 .white_captures = 0,
                 .single_capture = .{-1, -1},
 
-                ._current_island = undefined,
+                ._current_island = .{.{0} ** length} ** length,
                 ._colours_adjacent_to_territory = ColoursAdjacent{ .black = false, .white = false},
                 ._evaluated_territory = .{.{0} ** length} ** length,
             };
@@ -81,8 +75,9 @@ pub fn GameState(comptime length: u8) type {
 
         /// check if a vertex has liberties; if not, return the number of stones captured.
         fn checkVertex(self : *Self, i : u8, j : u8, inactive : u2) u16 {
+            defer self._current_island = .{.{0} ** length} ** length;
             var captured_stones : u16 = 0;
-            self._current_island = .{.{0} ** length} ** length;
+
             if (self.board[i][j] == inactive) {
                 if (self.hasLiberties(i, j) == false) {
                     captured_stones += self.clearCapturedStones();
@@ -281,9 +276,9 @@ pub fn GameState(comptime length: u8) type {
             // matrix to store the territory currently being checked.
             // the logic for computing who owns it is slightly different though, hence
             // we need a different recursive procedure than the one for islands.
-            self._current_island = .{.{0} ** length} ** length;
-
+            defer self._current_island = .{.{0} ** length} ** length;
             defer self._evaluated_territory = .{.{0} ** length} ** length;
+
             for (self.board, 0..) |row, i| {
                 for (row, 0..) |vertex, j| {
                     if (vertex != 0 or self._evaluated_territory[i][j] == 1) {
