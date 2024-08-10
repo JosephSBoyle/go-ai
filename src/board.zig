@@ -10,7 +10,7 @@ const Evaluation = packed struct {
     white_score : u32,
 };
 
-const ColoursSeen = packed struct {
+const ColoursAdjacent = packed struct {
     black : bool,
     white : bool,
 };
@@ -31,19 +31,24 @@ pub fn GameState(comptime length: u8) type {
         const Self = @This();
         pub const vertices : u16 = @as(u16, length) * @as(u16, length);
         const Board  = [length][length]u2;
-        const Island = [length][length]u1;
+        const BitBoard = [length][length]u1;
         const directions = [4][2]i8{
-            .{-1, 0},   // above
-            .{1, 0},    // below
-            .{0, -1},   // left
-            .{0, 1},    // right
+            .{-1,  0 },   // above
+            .{ 1,  0 },   // below
+            .{ 0, -1 },   // left
+            .{ 0,  1 },   // right
         };
 
         last_move_was_pass : bool,
         blacks_move : bool, // black starts in Go.
 
         board : Board,
-        _current_island : Island, // The current island we are checking for liberties.
+
+        // The current island we are checking for liberties.
+        _current_island : BitBoard,
+
+        // The territory which has been evaluated this cycle.
+        _evaluated_territory : BitBoard,
 
         // NOTE could these sizes be reduced?
         // There must be a theoretical limit on the number of possible captures in a game of Go;
@@ -56,7 +61,7 @@ pub fn GameState(comptime length: u8) type {
         // did not involve a single-stone being captured.
         single_capture : [2]i8,
 
-        _colours_seen_adjacent_to_island : ColoursSeen,
+        _colours_adjacent_to_territory : ColoursAdjacent,
 
         /// Initialize a new gamestate.
         pub fn init() Self {
@@ -64,11 +69,13 @@ pub fn GameState(comptime length: u8) type {
                 .last_move_was_pass = false,
                 .blacks_move = true,
                 .board = .{.{0} ** length} ** length,
-                ._current_island = undefined,
                 .black_captures = 0,
                 .white_captures = 0,
                 .single_capture = .{-1, -1},
-                ._colours_seen_adjacent_to_island = ColoursSeen{ .black = false, .white = false},
+
+                ._current_island = undefined,
+                ._colours_adjacent_to_territory = ColoursAdjacent{ .black = false, .white = false},
+                ._evaluated_territory = .{.{0} ** length} ** length,
             };
         }
 
@@ -221,13 +228,19 @@ pub fn GameState(comptime length: u8) type {
             return false;
         }
 
-        /// Who owns the island containing i, j?
+        /// Who owns the territory containing i, j?
         fn computeTerritoryOwner(self : *Self, i : u8, j : u8) void {
             // this is a bitmask where 1's form the current island,
-            // where an 'island' is a contiguous block of adjacent (non-diagonally)
+            // where a territory is a contiguous block of adjacent (non-diagonally)
             // **empty vertices**.
+            
+            // The contiguous empty vertices that we're checking for 'capture'
+            // cleared when we evaluate all contiguous vertices.
             self._current_island[i][j] = 1;
-            // print("\t\t{any}, {any}\n", .{i, j});
+            
+            // A bitboard of all vertices evaluated in this eval cycle
+            // cleared when evaluation is complete.
+            self._evaluated_territory[i][j] = 1;
 
             // recursively search for adjacent stones of white and black
             // also constructs the *full* island (important)
@@ -238,15 +251,15 @@ pub fn GameState(comptime length: u8) type {
                 if (ni >= 0 and ni < length and nj >= 0 and nj < length) {
                     const new_i : u8 = @intCast(ni);
                     const new_j : u8 = @intCast(nj);
-                    
+
                     // already visited
                     if (self._current_island[new_i][new_j] == 1) {
                         continue;
                     }
 
                     switch (self.board[new_i][new_j]) {
-                        1 => self._colours_seen_adjacent_to_island.black = true,
-                        2 => self._colours_seen_adjacent_to_island.white = true,
+                        1 => self._colours_adjacent_to_territory.black = true,
+                        2 => self._colours_adjacent_to_territory.white = true,
                         // Recursively expand the territory island
                         0 => self.computeTerritoryOwner(new_i, new_j),
                         3 => break, // should be impossible! 
@@ -264,42 +277,47 @@ pub fn GameState(comptime length: u8) type {
             var black_territory : u16 = 0;
             var white_territory : u16 = 0;
 
+            // territories have some nice isomorphisms to islands, so we can use this
+            // matrix to store the territory currently being checked.
+            // the logic for computing who owns it is slightly different though, hence
+            // we need a different recursive procedure than the one for islands.
             self._current_island = .{.{0} ** length} ** length;
 
-            // _ = self.renderBoard();
+            defer self._evaluated_territory = .{.{0} ** length} ** length;
             for (self.board, 0..) |row, i| {
                 for (row, 0..) |vertex, j| {
-                    if (vertex != 0) {
-                        // Skip occupied vertices.
+                    if (vertex != 0 or self._evaluated_territory[i][j] == 1) {
+                        // Skip occupied vertices, and vertices that have already
+                        // been evaluated.
                         continue;
                     }
 
                     self.computeTerritoryOwner(@intCast(i), @intCast(j));
-                    if (self._colours_seen_adjacent_to_island.black and self._colours_seen_adjacent_to_island.white) {
+                    if (self._colours_adjacent_to_territory.black and self._colours_adjacent_to_territory.white) {
                         continue;
                     }
-                    if (!self._colours_seen_adjacent_to_island.black and !self._colours_seen_adjacent_to_island.white) {
+                    if (!self._colours_adjacent_to_territory.black and !self._colours_adjacent_to_territory.white) {
                         continue;
                     }
 
-                    if (self._colours_seen_adjacent_to_island.black) {
-                        print("BLACK TERRITORY FOUND AT ISLAND : {any}, {any}\n", .{i, j});
+                    if (self._colours_adjacent_to_territory.black) {
+                        // print("BLACK TERRITORY FOUND AT ISLAND : {any}, {any}\n", .{i, j});
                         black_territory += self.clearCapturedStones();
                     } 
-                    if (self._colours_seen_adjacent_to_island.white) {
-                        print("WHITE TERRITORY FOUND AT ISLAND : {any}, {any}\n", .{i, j});
+                    if (self._colours_adjacent_to_territory.white) {
+                        // print("WHITE TERRITORY FOUND AT ISLAND : {any}, {any}\n", .{i, j});
                         white_territory += self.clearCapturedStones();
                     }
 
                     // clear the tracked territory
                     self._current_island = .{.{0} ** length} ** length;
                     
-                    self._colours_seen_adjacent_to_island.black = false;
-                    self._colours_seen_adjacent_to_island.white = false;
+                    self._colours_adjacent_to_territory.black = false;
+                    self._colours_adjacent_to_territory.white = false;
                 }
             }
-            print("WHITE CAPTURES : {any}\n", .{self.white_captures});
-            print("WHITE TERRITORY: {any}\n", .{white_territory});
+            // print("WHITE CAPTURES : {any}\n", .{self.white_captures});
+            // print("WHITE TERRITORY: {any}\n", .{white_territory});
             
             return Evaluation{
                 .black_score=self.black_captures + black_territory,
@@ -327,138 +345,142 @@ pub fn GameState(comptime length: u8) type {
     };
 }
 
-// test "test create board type" {
-//     const state : type = GameState(2);
-//     try expect(state.vertices == 4);
-// }
+test "test create board type" {
+    const state : type = GameState(2);
+    try expect(state.vertices == 4);
+}
 
-// test "board is all zeros" {
-//     const state = GameState(2).init();
+test "board is all zeros" {
+    const state = GameState(2).init();
 
-//     for (state.board, 0..) |row, row_index| {
-//         for (row, 0..) |cell, column_index| {
-//             if (row_index == column_index) {
-//                 try expect(cell == 0);
-//             }
-//         }
-//     }
-// }
+    for (state.board, 0..) |row, row_index| {
+        for (row, 0..) |cell, column_index| {
+            if (row_index == column_index) {
+                try expect(cell == 0);
+            }
+        }
+    }
+}
 
-// test "play stone" {
-//     var state = GameState(2).init();
-//     _ = state.playStone(0, 0);
-//     try expect(state.board[0][0] == 1);
-//     try expect(state.blacks_move == false);
-// }
+test "play stone" {
+    var state = GameState(2).init();
+    _ = state.playStone(0, 0);
+    try expect(state.board[0][0] == 1);
+    try expect(state.blacks_move == false);
+}
 
-// test "play multiple stones" {
-//     var state = GameState(2).init();
-//     _ = state.playStone(0, 0);
-//     _ = state.playStone(1, 1);
+test "play multiple stones" {
+    var state = GameState(2).init();
+    _ = state.playStone(0, 0);
+    _ = state.playStone(1, 1);
 
-//     try expect(state.board[0][0] == 1);
-//     try expect(state.board[1][1] == 2);
-//     try expect(state.blacks_move == true);
-// }
+    try expect(state.board[0][0] == 1);
+    try expect(state.board[1][1] == 2);
+    try expect(state.blacks_move == true);
+}
 
-// test "pass turn" {
-//     var state = GameState(2).init();
-//     try expect(state.blacks_move == true);
+test "pass turn" {
+    var state = GameState(2).init();
+    try expect(state.blacks_move == true);
 
-//     _ = state.passTurn();
-//     try expect(state.blacks_move == false);
-// }
+    _ = state.passTurn();
+    try expect(state.blacks_move == false);
+}
 
-// test "game ends after two successive passes" {
-//     var state = GameState(2).init();
-//     try expect(state.passTurn() == false);
-//     try expect(state.passTurn() == true);
-// }
+test "game ends after two successive passes" {
+    var state = GameState(2).init();
+    try expect(state.passTurn() == false);
+    try expect(state.passTurn() == true);
+}
 
-// test "capture a stone" {
-//     var state = GameState(2).init();
-//     _ = state.playStone(0, 0);
-//     _ = state.playStone(1, 0);
-//     _ = state.playStone(1, 1); // black captures the white stone in the corner
+test "capture a stone" {
+    var state = GameState(2).init();
+    _ = state.playStone(0, 0);
+    _ = state.playStone(1, 0);
+    _ = state.playStone(1, 1); // black captures the white stone in the corner
 
-//     try expect(state.board[1][0] == 0);
-//     try expect(state.black_captures == 1);
-// }
+    try expect(state.board[1][0] == 0);
+    try expect(state.black_captures == 1);
+}
 
-// test "capture a block of stones" {
-//     var state = GameState(2).init();
-//     _ = state.playStone(0, 1);
-//     _ = state.playStone(1, 1);
-//     _ = state.playStone(0, 0);
-//     _ = state.playStone(1, 0);
-//     try expect(state.black_captures == 0);
-//     try expect(state.white_captures == 2);
-// }
+test "capture a block of stones" {
+    var state = GameState(2).init();
+    _ = state.playStone(0, 1);
+    _ = state.playStone(1, 1);
+    _ = state.playStone(0, 0);
+    _ = state.playStone(1, 0);
+    try expect(state.black_captures == 0);
+    try expect(state.white_captures == 2);
+}
 
-// test "self-capture fails" {
-//     var state = GameState(2).init();
-//     _ = state.playStone(0, 0);
-//     _ = state.passTurn();
-//     _ = state.playStone(1, 1);
+test "self-capture fails" {
+    var state = GameState(2).init();
+    _ = state.playStone(0, 0);
+    _ = state.passTurn();
+    _ = state.playStone(1, 1);
 
-//     try expect(state.blacks_move == false);
-//     try expect(state.playStone(1, 0) == false);
-//     try expect(state.blacks_move == false);
-//     try expect(state.board[1][0] == 0);
-// }
+    try expect(state.blacks_move == false);
+    try expect(state.playStone(1, 0) == false);
+    try expect(state.blacks_move == false);
+    try expect(state.board[1][0] == 0);
+}
 
-// test "test the kō rule" {
-//     var state = GameState(5).init();
-//     _ = state.playStone(2, 0); // black
-//     _ = state.playStone(1, 2); // white
-//     _ = state.playStone(1, 1); // black
-//     _ = state.playStone(3, 2); // white
-//     _ = state.playStone(3, 1); // black
-//     _ = state.playStone(2, 3); // white
-//     _ = state.playStone(2, 2); // black
-//     _ = state.playStone(2, 1); // white captures
+test "test the kō rule" {
+    var state = GameState(5).init();
+    _ = state.playStone(2, 0); // black
+    _ = state.playStone(1, 2); // white
+    _ = state.playStone(1, 1); // black
+    _ = state.playStone(3, 2); // white
+    _ = state.playStone(3, 1); // black
+    _ = state.playStone(2, 3); // white
+    _ = state.playStone(2, 2); // black
+    _ = state.playStone(2, 1); // white captures
 
-//     try expect(state.white_captures == 1);
-//     try expect(state.playStone(2, 2) == false); // black tries to re-capture -- illegal due to kō rule
-//     try expect(state.black_captures == 0);
-//     _ = state.playStone(4, 4); // black plays another, unrelated move...
-//     _ = state.playStone(4, 3); // so does white now...
+    try expect(state.white_captures == 1);
+    try expect(state.playStone(2, 2) == false); // black tries to re-capture -- illegal due to kō rule
+    try expect(state.black_captures == 0);
+    _ = state.playStone(4, 4); // black plays another, unrelated move...
+    _ = state.playStone(4, 3); // so does white now...
 
-//     try expect(state.playStone(2, 2) == true); // black tries to re-capture again -- kō rule does not apply
-//     try expect(state.black_captures == 1);
-// }
+    try expect(state.playStone(2, 2) == true); // black tries to re-capture again -- kō rule does not apply
+    try expect(state.black_captures == 1);
+}
 
-// test "eval starts at 0; 0" {
-//     var state = GameState(19).init();
-//     const evaluation = state.computeScores();
-//     try expect(evaluation.black_score == 0);
-//     try expect(evaluation.white_score == 0);
-// }
+test "eval starts at 0; 0" {
+    var state = GameState(19).init();
+    const evaluation = state.computeScores();
+    try expect(evaluation.black_score == 0);
+    try expect(evaluation.white_score == 0);
+}
 
-// test "evaluating score with capture" {
-//     var state = GameState(2).init();
-//     _ = state.playStone(1, 0);
-//     _ = state.playStone(0, 0);
-//     _ = state.playStone(0, 1); // black captures
-//     // _ = state.renderBoard();
+test "evaluating score with capture" {
+    var state = GameState(2).init();
+    _ = state.playStone(1, 0);
+    _ = state.playStone(0, 0);
+    _ = state.playStone(0, 1); // black captures
 
-//     const evaluation = state.computeScores();
-//     print("BLACK SCORE {any}", .{evaluation.black_score});
-//     // One capture, two territories (0, 0), (1, 1)
-//     try expect(evaluation.black_score == 3);
-//     try expect(evaluation.white_score == 0);
-// }
+    const evaluation = state.computeScores();
+    // One capture, two territories (0, 0), (1, 1)
+    try expect(evaluation.black_score == 3);
+    try expect(evaluation.white_score == 0);
+}
 
 test "capture two territories" {
     var state = GameState(2).init();
     _ = state.playStone(0, 0);
     _ = state.playStone(1, 0);
-
     _ = state.playStone(0, 1);
     _ = state.playStone(1, 1); // white captures both of black's stones
-
     const evaluation = state.computeScores();
+    
     // One capture, two territories (0, 0), (1, 1)
     try expect(evaluation.black_score == 0);
     try expect(evaluation.white_score == 4);
+}
+
+test "evaluation is idempotent" {
+    var state = GameState(2).init();
+    _ = state.playStone(0, 0);
+    try expect(state.computeScores().black_score == 3);
+    try expect(state.computeScores().black_score == 3);
 }
