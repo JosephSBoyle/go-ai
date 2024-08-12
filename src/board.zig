@@ -19,9 +19,10 @@ const ColoursAdjacent = packed struct {
 // 0 represents empty; 1 = black; 2 = white
 //
 // length defines both the length and width of the square board.
-pub fn GameState(comptime length: u8) type {
+pub fn GameState(comptime board_length: u8) type {
     return struct {
         const Self = @This();
+        pub const length = board_length;
         pub const vertices : u16 = @as(u16, length) * @as(u16, length);
         const Board  = [length][length]u2;
         const BitBoard = [length][length]u1;
@@ -33,6 +34,7 @@ pub fn GameState(comptime length: u8) type {
         };
 
         last_move_was_pass : bool,
+        finished : bool,    // true if the game is finished (two successive passes)
         blacks_move : bool, // black starts in Go.
 
         board : Board,
@@ -61,6 +63,7 @@ pub fn GameState(comptime length: u8) type {
             return Self{
                 .last_move_was_pass = false,
                 .blacks_move = true,
+                .finished = false,
                 .board = .{.{0} ** length} ** length,
                 .black_captures = 0,
                 .white_captures = 0,
@@ -76,6 +79,7 @@ pub fn GameState(comptime length: u8) type {
         pub fn copy(self : *Self) Self {
             return Self{
                 .last_move_was_pass = self.last_move_was_pass,
+                .finished    = self.finished,
                 .blacks_move = self.blacks_move,
                 // Concatenate the board to a comptime empty array, copying it
                 .board = self.board ++ .{},
@@ -145,6 +149,9 @@ pub fn GameState(comptime length: u8) type {
             if (captured_stones == 0) {
                 // This check will, funnily enough, actually *capture* the placed stone
                 // which leaves the board as it was before the illegal move.
+                //
+                // note that the return value of checkVertex is intentionally ignored --
+                // we shouldn't modify the captured stones count when an illegal move is played.
                 if (self.checkVertex(i, j, active) > 0) {
                     // self-capture isn't allowed
                     return false;
@@ -198,13 +205,13 @@ pub fn GameState(comptime length: u8) type {
 
         /// Pass the turn.
         /// Returns true if the game has ended (two successive passes).
-        pub fn passTurn(self : *Self) bool {
+        pub fn passTurn(self : *Self) void {
             if (self.last_move_was_pass == true) {
-                return true;
+                self.finished = true;
+            } else {
+                self.nextPlayer();
+                self.last_move_was_pass = true;
             }
-            self.nextPlayer();
-            self.last_move_was_pass = true;
-            return false;
         }
 
         /// Return whether or not a co-ordinate has liberties,
@@ -430,14 +437,16 @@ test "pass turn" {
     var state = GameState(2).init();
     try expect(state.blacks_move == true);
 
-    _ = state.passTurn();
+    state.passTurn();
     try expect(state.blacks_move == false);
 }
 
 test "game ends after two successive passes" {
     var state = GameState(2).init();
-    try expect(state.passTurn() == false);
-    try expect(state.passTurn() == true);
+    state.passTurn();
+    try expect(state.finished == false);
+    state.passTurn();
+    try expect(state.finished == true);
 }
 
 test "capture a stone" {
@@ -463,7 +472,7 @@ test "capture a block of stones" {
 test "self-capture fails" {
     var state = GameState(2).init();
     _ = state.playStone(0, 0);
-    _ = state.passTurn();
+    state.passTurn();
     _ = state.playStone(1, 1);
 
     try expect(state.blacks_move == false);
