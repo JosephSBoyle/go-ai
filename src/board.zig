@@ -1,6 +1,5 @@
 const std = @import("std");
 const print = std.debug.print;
-const assert = std.debug.assert;
 
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
@@ -67,8 +66,26 @@ pub fn GameState(comptime length: u8) type {
                 .white_captures = 0,
                 .single_capture = .{-1, -1},
 
-                ._current_island = .{.{0} ** length} ** length,
                 ._colours_adjacent_to_territory = ColoursAdjacent{ .black = false, .white = false},
+                ._current_island      = .{.{0} ** length} ** length,
+                ._evaluated_territory = .{.{0} ** length} ** length,
+            };
+        }
+        
+        /// Create a copy of an instance
+        pub fn copy(self : *Self) Self {
+            return Self{
+                .last_move_was_pass = self.last_move_was_pass,
+                .blacks_move = self.blacks_move,
+                // Concatenate the board to a comptime empty array, copying it
+                .board = self.board ++ .{},
+                .black_captures = self.black_captures,
+                .white_captures = self.white_captures,
+                .single_capture = self.single_capture,
+                
+                // These are all transient and can be set to their defaults.                
+                ._colours_adjacent_to_territory = ColoursAdjacent{ .black = false, .white = false},
+                ._current_island      = .{.{0} ** length} ** length,
                 ._evaluated_territory = .{.{0} ** length} ** length,
             };
         }
@@ -530,4 +547,15 @@ test "area scoring is idempotent" {
     // (since this game is implicitly not finished)
     try expect(state.areaScore().black_score == 1);
     try expect(state.areaScore().black_score == 1);
+}
+
+test "copy gamestate" {
+    const TwoByTwo = GameState(2);
+    var state = TwoByTwo.init();
+    _ = state.playStone(0, 0);
+    _ = state.playStone(1, 0);
+
+    const new_state = state.copy();
+    try expect(new_state.board[0][0] == 1);
+    try expect(new_state.board[1][0] == 2);
 }
