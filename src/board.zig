@@ -264,7 +264,13 @@ pub fn GameState(comptime length: u8) type {
             return;
         }
 
-        /// Return the captures + territories for black and white, respectively.
+        /// Implementation of the basic rules of scoring in Go according to:
+        ///     https://en.wikipedia.org/wiki/Rules_of_Go
+        /// 
+        /// * Uses territory scoring i.e. a player's score is the sum of their captured stones
+        ///     and the number of empty vertices ('territory') exclusively under their control.
+        /// * Does not use seki (https://en.wikipedia.org/wiki/Rules_of_Go#Seki)
+        //
         pub fn computeScores(self : *Self) Evaluation {
             // loop through each island and check if all of it's liberties are a single colour
             // if so, increment the territory score for that colour.
@@ -292,11 +298,14 @@ pub fn GameState(comptime length: u8) type {
                         continue;
                     }
                     if (!self._colours_adjacent_to_territory.black and !self._colours_adjacent_to_territory.white) {
+                        // board is empty
                         continue;
                     }
 
                     if (self._colours_adjacent_to_territory.black) {
                         // print("BLACK TERRITORY FOUND AT ISLAND : {any}, {any}\n", .{i, j});
+                    
+                        // TODO new method:
                         black_territory += self.clearCapturedStones();
                     } 
                     if (self._colours_adjacent_to_territory.white) {
@@ -319,7 +328,7 @@ pub fn GameState(comptime length: u8) type {
                 .white_score=self.white_captures + white_territory,
             };
         }
-
+        
         // TODO use the returned string instead of printing ad-hoc
         pub fn renderBoard(self : *Self) []u8 {
             // loop through each of the board's rows
