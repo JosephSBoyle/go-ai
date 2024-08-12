@@ -5,7 +5,7 @@ const assert = std.debug.assert;
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 
-const Evaluation = packed struct {
+const Score = packed struct {
     black_score : u32,
     white_score : u32,
 };
@@ -224,7 +224,7 @@ pub fn GameState(comptime length: u8) type {
         }
 
         /// Who owns the territory containing i, j?
-        fn computeTerritoryOwner(self : *Self, i : u8, j : u8) void {
+        fn trackTerritoryBlock(self : *Self, i : u8, j : u8) void {
             // this is a bitmask where 1's form the current island,
             // where a territory is a contiguous block of adjacent (non-diagonally)
             // **empty vertices**.
@@ -256,7 +256,7 @@ pub fn GameState(comptime length: u8) type {
                         1 => self._colours_adjacent_to_territory.black = true,
                         2 => self._colours_adjacent_to_territory.white = true,
                         // Recursively expand the territory island
-                        0 => self.computeTerritoryOwner(new_i, new_j),
+                        0 => self.trackTerritoryBlock(new_i, new_j),
                         3 => break, // should be impossible! 
                     }
                 }
@@ -264,14 +264,40 @@ pub fn GameState(comptime length: u8) type {
             return;
         }
 
-        /// Implementation of the basic rules of scoring in Go according to:
+        /// Score using the area scoring method.
+        /// Each player's score is the sum of their stones.
+        /// Simpler than the territory scoring method.
+        /// Ignores the number of stones that have been captured.
+        pub fn areaScore(self : *Self) Score {
+            // Assumes that all dead groups have been captured
+            // i.e. the game is played to it's full conclusion
+
+            var black_territory : u16 = 0;
+            var white_territory : u16 = 0;
+
+            for (self.board) |row| {
+                for (row) |vertex| {
+                    switch (vertex) {
+                        1 => black_territory += 1,
+                        2 => white_territory += 1,
+                        else => continue, // empty vertex
+                    }
+                }
+            }
+            return Score {
+                .black_score=black_territory,
+                .white_score=white_territory,
+            };
+        }
+
+        /// Score using the basic rules of scoring in Go according to:
         ///     https://en.wikipedia.org/wiki/Rules_of_Go
-        /// 
+        ///
         /// * Uses territory scoring i.e. a player's score is the sum of their captured stones
         ///     and the number of empty vertices ('territory') exclusively under their control.
         /// * Does not use seki (https://en.wikipedia.org/wiki/Rules_of_Go#Seki)
         //
-        pub fn computeScores(self : *Self) Evaluation {
+        pub fn territoryScore(self : *Self) Score {
             // loop through each island and check if all of it's liberties are a single colour
             // if so, increment the territory score for that colour.
 
@@ -282,7 +308,7 @@ pub fn GameState(comptime length: u8) type {
             // matrix to store the territory currently being checked.
             // the logic for computing who owns it is slightly different though, hence
             // we need a different recursive procedure than the one for islands.
-            defer self._current_island = .{.{0} ** length} ** length;
+            defer self._current_island      = .{.{0} ** length} ** length;
             defer self._evaluated_territory = .{.{0} ** length} ** length;
 
             for (self.board, 0..) |row, i| {
@@ -293,7 +319,7 @@ pub fn GameState(comptime length: u8) type {
                         continue;
                     }
 
-                    self.computeTerritoryOwner(@intCast(i), @intCast(j));
+                    self.trackTerritoryBlock(@intCast(i), @intCast(j));
                     if (self._colours_adjacent_to_territory.black and self._colours_adjacent_to_territory.white) {
                         continue;
                     }
@@ -323,12 +349,12 @@ pub fn GameState(comptime length: u8) type {
             // print("WHITE CAPTURES : {any}\n", .{self.white_captures});
             // print("WHITE TERRITORY: {any}\n", .{white_territory});
             
-            return Evaluation{
+            return Score{
                 .black_score=self.black_captures + black_territory,
                 .white_score=self.white_captures + white_territory,
             };
         }
-        
+
         // TODO use the returned string instead of printing ad-hoc
         pub fn renderBoard(self : *Self) []u8 {
             // loop through each of the board's rows
@@ -452,7 +478,7 @@ test "test the kō rule" {
 
 test "eval starts at 0; 0" {
     var state = GameState(19).init();
-    const evaluation = state.computeScores();
+    const evaluation = state.territoryScore();
     try expect(evaluation.black_score == 0);
     try expect(evaluation.white_score == 0);
 }
@@ -463,7 +489,7 @@ test "evaluating score with capture" {
     _ = state.playStone(0, 0);
     _ = state.playStone(0, 1); // black captures
 
-    const evaluation = state.computeScores();
+    const evaluation = state.territoryScore();
     // One capture, two territories (0, 0), (1, 1)
     try expect(evaluation.black_score == 3);
     try expect(evaluation.white_score == 0);
@@ -475,7 +501,7 @@ test "capture two territories" {
     _ = state.playStone(1, 0);
     _ = state.playStone(0, 1);
     _ = state.playStone(1, 1); // white captures both of black's stones
-    const evaluation = state.computeScores();
+    const evaluation = state.territoryScore();
     
     // One capture, two territories (0, 0), (1, 1)
     try expect(evaluation.black_score == 0);
@@ -485,6 +511,23 @@ test "capture two territories" {
 test "evaluation is idempotent" {
     var state = GameState(2).init();
     _ = state.playStone(0, 0);
-    try expect(state.computeScores().black_score == 3);
-    try expect(state.computeScores().black_score == 3);
+    try expect(state.territoryScore().black_score == 3);
+    try expect(state.territoryScore().black_score == 3);
+}
+
+test "evaluate area scoring" {
+    var state = GameState(2).init();
+    _ = state.playStone(0, 0);
+    try expect(state.areaScore().black_score == 1);
+    try expect(state.areaScore().white_score == 0);
+}
+
+test "area scoring is idempotent" {
+    var state = GameState(2).init();
+    _ = state.playStone(0, 0);
+
+    // This is a different score than when using the other method
+    // (since this game is implicitly not finished)
+    try expect(state.areaScore().black_score == 1);
+    try expect(state.areaScore().black_score == 1);
 }
