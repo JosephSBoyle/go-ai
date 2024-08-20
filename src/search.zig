@@ -31,6 +31,10 @@ fn minimax(
         return value;
     }
 
+    // many implementations will iterate over a collection of valid stone plays;
+    // this instead iterates over each move, updating alpha, beta and the expected value,
+    // conditional on the move being legal. Passing the turn is a special method; and is
+    // handled outside of the loop and does not check for legality (it is always legal).
     if (state.blacks_move) {
         // maximizing player's turn
         var value : i64 = 0;
