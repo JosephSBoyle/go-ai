@@ -116,7 +116,7 @@ test "minimax for an empty 3x3 grid leads to a score of 4 for black" {
     try expect(minimax(ThreeByThree, &state, 0, 0, std.math.maxInt(i64)) == 4);
 }
 
-test "minimax for a 4x4 grid doesn't terminate without alpha-beta pruning" {
-    var state = FourByFour.init();
-    print("SCORE WITH OPTIMAL PLAY 4x4 GRID: {any}\n", .{minimax(FourByFour, &state, 0, 0, std.math.maxInt(i64))});
-}
+// test "minimax for a 4x4 grid doesn't terminate without alpha-beta pruning" {
+//     var state = FourByFour.init();
+//     print("SCORE WITH OPTIMAL PLAY 4x4 GRID: {any}\n", .{minimax(FourByFour, &state, 0, 0, std.math.maxInt(i64))});
+// }
